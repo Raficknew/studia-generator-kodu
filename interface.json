@@ -1,0 +1,23 @@
+{
+	"output": "generated_models.py",
+	"endianness": "<",
+	"types": [
+		{
+			"name": "SensorReading",
+			"fields": [
+				{ "name": "device_id", "type": "str", "length": 24 },
+				{ "name": "timestamp", "type": "int64" },
+				{ "name": "temperature", "type": "float64" },
+				{ "name": "active", "type": "bool" }
+			]
+		},
+		{
+			"name": "Command",
+			"fields": [
+				{ "name": "command_id", "type": "int32" },
+				{ "name": "name", "type": "str", "length": 32 },
+				{ "name": "retry", "type": "bool" }
+			]
+		}
+	]
+}
