@@ -9,6 +9,7 @@ from generated_models import Command, SensorReading
 HOST = "127.0.0.1"
 PORT = 9000
 COMMAND_SIZE = len(Command(command_id=0, name="", retry=False).serialize())
+CLIENT_PACKET_SIZE = len(SensorReading(device_id="", timestamp=0, humidity=0.0, active=False, history={"1": "49", "2": "50", "3": "51", "4": "52"}).serialize())
 PUBLISH_INTERVAL_SEC = 2.0
 
 
@@ -20,16 +21,6 @@ def recv_exact(conn: socket.socket, size: int) -> bytes:
             raise ConnectionError("Socket closed before full payload")
         chunks.extend(part)
     return bytes(chunks)
-
-
-def build_response(cmd: Command) -> SensorReading:
-    temp = 20.5 if cmd.retry else 22.0
-    return SensorReading(
-        device_id=f"srv-{cmd.command_id}",
-        timestamp=int(time.time()),
-        temperature=temp,
-        active=True,
-    )
 
 
 class Publisher:
@@ -70,7 +61,8 @@ def publish_loop(publisher: Publisher) -> None:
         reading = SensorReading(
             device_id="sensor-main",
             timestamp=int(time.time()),
-            temperature=21.0 + (counter % 5) * 0.3,
+            humidity=45.0 + (counter % 5) * 1.5,
+            history={"batch": str(counter), "source": "server"},
             active=True,
         )
         publisher.publish(reading)
@@ -80,42 +72,56 @@ def publish_loop(publisher: Publisher) -> None:
 
 def handle_client(conn: socket.socket, addr: tuple[str, int], publisher: Publisher) -> None:
     with conn:
-        print(f"Connected: {addr}")
+        print(f"(server): Connected: {addr}")
         payload = recv_exact(conn, COMMAND_SIZE)
         command = Command.deserialize(payload)
-        print(f"Received command: {command}")
+        print(f"(server): Received command: {command}")
 
         if command.name != "subscribe":
-            response = build_response(command)
-            conn.sendall(response.serialize())
-            print(f"Sent one-shot response: {response}")
+            print(f"(server): Rejected command: {command.name}")
             return
 
         publisher.subscribe(conn)
-        print(f"Subscriber registered: {addr}")
+        print(f"(server): Subscriber registered: {addr}")
         try:
-            while conn.recv(1):
-                pass
+            while True:
+                try:
+                    payload = recv_exact(conn, CLIENT_PACKET_SIZE)
+                except ConnectionError:
+                    print(f"(server): Client upload closed: {addr}")
+                    break
+
+                client_packet = SensorReading.deserialize(payload)
+                print(f"(server): Received client packet: {client_packet}")
+
+            while True:
+                time.sleep(1)
         finally:
             publisher.unsubscribe(conn)
-            print(f"Subscriber disconnected: {addr}")
+            print(f"(server): Subscriber disconnected: {addr}")
 
 
-def main() -> None:
+def main(host: str = HOST, port: int = PORT, ready_event: threading.Event | None = None) -> None:
     publisher = Publisher()
     threading.Thread(target=publish_loop, args=(publisher,), daemon=True).start()
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind((HOST, PORT))
+        server.bind((host, port))
         server.listen()
-        print(f"Server listening on {HOST}:{PORT}")
-        print("Mode: publisher-subscriber")
+        if ready_event is not None:
+            ready_event.set()
+        print(f"(server): Listening on {host}:{port}")
+        print("(server): Mode: publisher-subscriber")
 
         while True:
             conn, addr = server.accept()
             threading.Thread(target=handle_client, args=(conn, addr, publisher), daemon=True).start()
 
 
+def run_server(host: str = HOST, port: int = PORT, ready_event: threading.Event | None = None) -> None:
+    main(host, port, ready_event)
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit("There is no connection right now, run main.py instead")

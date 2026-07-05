@@ -1,31 +1,40 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 import struct
+
+
+def _expected_size_for_SensorReading() -> int:
+    size = 0
+    size += 24
+    size += struct.calcsize("<q")
+    size += struct.calcsize("<d")
+    size += 1024
+    size += struct.calcsize("<?")
+    return size
 
 
 @dataclass
 class SensorReading:
     device_id: str
     timestamp: int
-    temperature: float
+    humidity: float
+    history: dict
     active: bool
 
     def serialize(self) -> bytes:
         return b"".join([
             _encode_str(self.device_id, 24),
             struct.pack("<q", self.timestamp),
-            struct.pack("<d", self.temperature),
+            struct.pack("<d", self.humidity),
+            _encode_dict(self.history, 1024),
             struct.pack("<?", self.active),
         ])
 
     @classmethod
     def deserialize(cls, payload: bytes) -> "SensorReading":
-        expected_size = 0
-        expected_size += 24
-        expected_size += struct.calcsize("<q")
-        expected_size += struct.calcsize("<d")
-        expected_size += struct.calcsize("<?")
+        expected_size = _expected_size_for_SensorReading()
         if len(payload) != expected_size:
             raise ValueError(f"Invalid payload size for SensorReading: expected {expected_size}, got {len(payload)}")
 
@@ -34,16 +43,27 @@ class SensorReading:
         offset += 24
         (timestamp,) = struct.unpack_from("<q", payload, offset)
         offset += struct.calcsize("<q")
-        (temperature,) = struct.unpack_from("<d", payload, offset)
+        (humidity,) = struct.unpack_from("<d", payload, offset)
         offset += struct.calcsize("<d")
+        history = _decode_dict(payload[offset:offset + 1024])
+        offset += 1024
         (active,) = struct.unpack_from("<?", payload, offset)
         offset += struct.calcsize("<?")
         return cls(
             device_id=device_id,
             timestamp=timestamp,
-            temperature=temperature,
+            humidity=humidity,
+            history=history,
             active=active,
         )
+
+
+def _expected_size_for_Command() -> int:
+    size = 0
+    size += struct.calcsize("<i")
+    size += 32
+    size += struct.calcsize("<?")
+    return size
 
 
 @dataclass
@@ -61,10 +81,7 @@ class Command:
 
     @classmethod
     def deserialize(cls, payload: bytes) -> "Command":
-        expected_size = 0
-        expected_size += struct.calcsize("<i")
-        expected_size += 32
-        expected_size += struct.calcsize("<?")
+        expected_size = _expected_size_for_Command()
         if len(payload) != expected_size:
             raise ValueError(f"Invalid payload size for Command: expected {expected_size}, got {len(payload)}")
 
@@ -91,3 +108,15 @@ def _encode_str(value: str, size: int) -> bytes:
 
 def _decode_str(value: bytes) -> str:
     return value.split(b"\x00", 1)[0].decode("utf-8")
+
+
+def _encode_dict(value: dict, size: int) -> bytes:
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    if len(raw) > size:
+        raise ValueError(f"Dictionary too large: max {size} bytes")
+    return raw.ljust(size, b"\x00")
+
+
+def _decode_dict(value: bytes) -> dict:
+    decoded = value.split(b"\x00", 1)[0].decode("utf-8")
+    return json.loads(decoded) if decoded else {}

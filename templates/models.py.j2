@@ -1,10 +1,27 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 import struct
 
 
 {% for type in types %}
+def _expected_size_for_{{ type.name }}() -> int:
+    size = 0
+{% for field in type.fields %}
+{% if field.type == "str" %}
+    size += {{ field.length }}
+{% elif field.type == "dict" %}
+    size += {{ field.length }}
+{% elif field.type == "bool" %}
+    size += struct.calcsize("{{ endianness }}?")
+{% else %}
+    size += struct.calcsize("{{ endianness }}{{ field.fmt }}")
+{% endif %}
+{% endfor %}
+    return size
+
+
 @dataclass
 class {{ type.name }}:
 {% for field in type.fields %}
@@ -16,6 +33,8 @@ class {{ type.name }}:
 {% for field in type.fields %}
 {% if field.type == "str" %}
             _encode_str(self.{{ field.name }}, {{ field.length }}),
+{% elif field.type == "dict" %}
+            _encode_dict(self.{{ field.name }}, {{ field.length }}),
 {% elif field.type == "bool" %}
             struct.pack("{{ endianness }}?", self.{{ field.name }}),
 {% else %}
@@ -26,16 +45,7 @@ class {{ type.name }}:
 
     @classmethod
     def deserialize(cls, payload: bytes) -> "{{ type.name }}":
-        expected_size = 0
-{% for field in type.fields %}
-{% if field.type == "str" %}
-        expected_size += {{ field.length }}
-{% elif field.type == "bool" %}
-        expected_size += struct.calcsize("{{ endianness }}?")
-{% else %}
-        expected_size += struct.calcsize("{{ endianness }}{{ field.fmt }}")
-{% endif %}
-{% endfor %}
+        expected_size = _expected_size_for_{{ type.name }}()
         if len(payload) != expected_size:
             raise ValueError(f"Invalid payload size for {{ type.name }}: expected {expected_size}, got {len(payload)}")
 
@@ -44,6 +54,9 @@ class {{ type.name }}:
 {% if field.type == "str" %}
         {{ field.name }} = _decode_str(payload[offset:offset + {{ field.length }}])
         offset += {{ field.length }}
+{% elif field.type == "dict" %}
+    {{ field.name }} = _decode_dict(payload[offset:offset + {{ field.length }}])
+    offset += {{ field.length }}
 {% elif field.type == "bool" %}
         ({{ field.name }},) = struct.unpack_from("{{ endianness }}?", payload, offset)
         offset += struct.calcsize("{{ endianness }}?")
@@ -69,3 +82,15 @@ def _encode_str(value: str, size: int) -> bytes:
 
 def _decode_str(value: bytes) -> str:
     return value.split(b"\x00", 1)[0].decode("utf-8")
+
+
+def _encode_dict(value: dict, size: int) -> bytes:
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    if len(raw) > size:
+        raise ValueError(f"Dictionary too large: max {size} bytes")
+    return raw.ljust(size, b"\x00")
+
+
+def _decode_dict(value: bytes) -> dict:
+    decoded = value.split(b"\x00", 1)[0].decode("utf-8")
+    return json.loads(decoded) if decoded else {}
